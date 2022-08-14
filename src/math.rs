@@ -72,7 +72,7 @@ pub fn rotate_frame(src_frame: &mut VideoFrame, dst_frame: &mut VideoFrame, tran
     let di = (dp + dst_width as i32 * dq) as usize;
 
     let no_overflow = di == 0 || usize::MAX / di >= 4;
-    if no_overflow && di * 4 < src_data.len() {
+    if no_overflow && di * 4 < dst_data.len() {
       for color_idx in 0..4 {
         dst_data[di * 4 + color_idx] = src_data[i * 4 + color_idx];
       }

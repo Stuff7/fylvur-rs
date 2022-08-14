@@ -131,15 +131,17 @@ fn encode_webp_from_decoded_frame(
       if let Ok(matrix) = math::parse_display_matrix(side_data.data()) {
         // Create rotated empty frame
         let mut dst_frame = Video::new(
-          Pixel::RGBA,
+          src_frame.format(),
           src_frame.height(),
           src_frame.width(),
         );
+        let now = std::time::Instant::now();
         math::rotate_frame(
           &mut src_frame,
           &mut dst_frame,
           &matrix,
         );
+        println!("Rotated in {:?}", now.elapsed());
         return Ok(encode_webp_file(&dst_frame))
       }
     }
