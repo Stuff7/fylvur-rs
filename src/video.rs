@@ -6,6 +6,7 @@ use std::fmt::Debug;
 use ffmpeg::Rescale;
 use ffmpeg::rescale;
 use ffmpeg::codec::context::Context as CodecCtx;
+use ffmpeg::decoder;
 use ffmpeg::format::{context, input, Pixel};
 use ffmpeg::packet::side_data;
 use ffmpeg::media::Type;
@@ -15,6 +16,8 @@ use webp::Encoder;
 use webp::WebPMemory;
 
 use crate::{f, math};
+
+const FFMPEG_RETRY_ERR: ffmpeg::Error = ffmpeg::Error::Other { errno: ffmpeg::error::EAGAIN };
 
 pub fn init() -> Result<(), ffmpeg::Error> {
   ffmpeg::init()
@@ -53,20 +56,19 @@ pub fn get_frame(
     return Err((f!("Failed to seek to {frame_time} in \"{video_path}\""), err).into())
   }
 
-  let input = av_format_ctx
+  let video_stream = av_format_ctx
   .streams()
   .best(Type::Video)
   .ok_or(ffmpeg::Error::StreamNotFound)?;
-  let video_stream_index = input.index();
+  let video_stream_index = video_stream.index();
+  // ---------------------------- DEBUG -------------------------------
+  println!("--- VIDEO INFO ---\nRotation: {:?}", get_video_rotation(&video_stream));
+  // ---------------------------- DEBUG -------------------------------
 
   // Find decoder
-  let context_decoder = CodecCtx::from_parameters(input.parameters())?;
-
+  let context_decoder = CodecCtx::from_parameters(video_stream.parameters())?;
   // Used to decode the packets and be able to receive frames
   let mut decoder = context_decoder.decoder().video()?;
-  // ---------------------------- DEBUG -------------------------------
-  println!("--- VIDEO INFO ---\nRotation: {:?}", get_video_rotation(&input));
-  // ---------------------------- DEBUG -------------------------------
 
   let frame_width = if frame_width == 0 {
     decoder.width()
@@ -84,42 +86,33 @@ pub fn get_frame(
     Flags::BILINEAR,
   )?;
 
-  let mut frame_index = 0;
-
-  let mut webp_file = None;
-  let mut receive_and_process_decoded_frames =
-  |decoder: &mut ffmpeg::decoder::Video| -> Result<(), ffmpeg::Error> {
-    let mut decoded = Video::empty();
-    while decoder.receive_frame(&mut decoded).is_ok() {
-      let mut rgb_frame = Video::empty();
-      // Convert to RGB24 pixel format
-      scaler.run(&decoded, &mut rgb_frame)?;
-      webp_file = Some(encode_webp_file(&rgb_frame));
-      frame_index += 1;
-    }
-
-    Ok(())
-  };
-
-  let mut i = 0;
   for (stream, packet) in av_format_ctx.packets() {
-    // Get only one frame
-    if i >= 1 {
-      break;
-    }
+    // Only send packet for video streams
     if stream.index() == video_stream_index {
+      println!("Sending packet {video_stream_index}");
       // Decode into a video frame
       decoder.send_packet(&packet)?;
-      // Receive the video frame
-      receive_and_process_decoded_frames(&mut decoder)?;
-      i += 1;
+      // Receive the video frame and encode as webp
+      match encode_webp_from_decoded_frame(&mut decoder, &mut scaler) {
+        Ok(webp_data) => {
+          // Signal end of stream on encoding success
+          decoder.send_eof()?;
+          // Receive all the frames for the eof signal
+          while decoder.receive_frame(&mut Video::empty()).is_ok() {}
+          return Ok(webp_data)
+        }
+        Err(err) => {
+          if err == FFMPEG_RETRY_ERR {
+            println!("Resource unavailable. Sending next packet...");
+          } else {
+            return Err(("Error receiving frame", err).into())
+          }
+        }
+      }
     }
   }
-  // Signal end of stream
-  decoder.send_eof()?;
-  receive_and_process_decoded_frames(&mut decoder)?;
 
-  webp_file.ok_or(VideoError::new("Failed to encode webp file"))
+  Err(VideoError::new(f!("Could not find a valid video stream in \"{video_path}\"")))
 }
 
 fn get_video_rotation(stream: &ffmpeg::Stream) -> Option<f32> {
@@ -131,6 +124,23 @@ fn get_video_rotation(stream: &ffmpeg::Stream) -> Option<f32> {
     return None
   }
   None
+}
+
+fn encode_webp_from_decoded_frame(
+  decoder: &mut decoder::Video,
+  scaler: &mut ScalingCtx,
+) -> Result<WebPMemory, ffmpeg::Error> {
+  let mut decoded = Video::empty();
+  loop {
+    decoder.receive_frame(&mut decoded)?;
+    println!("RECEIVED FRAME");
+    let mut rgb_frame = Video::empty();
+    // Convert to RGB24 pixel format
+    scaler.run(&decoded, &mut rgb_frame)?;
+    let webp_file = encode_webp_file(&rgb_frame);
+    println!("Encoded webp {webp_file:?}");
+    return Ok(webp_file)
+  }
 }
 
 fn encode_webp_file(frame: &Video) -> WebPMemory {
@@ -157,9 +167,9 @@ fn fix_img_padding(frame: &Video) -> Vec<u8> {
   buffer
 }
 
-fn seek(input: &mut context::Input, seconds: u32) -> Result<(), ffmpeg::Error> {
+fn seek(video_stream: &mut context::Input, seconds: u32) -> Result<(), ffmpeg::Error> {
   let position = seconds.rescale((1, 1), rescale::TIME_BASE);
-  input.seek(position, ..position)
+  video_stream.seek(position, ..position)
 }
 
 #[derive(Debug)]

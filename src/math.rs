@@ -1,6 +1,10 @@
 use crate::f;
 
-/// Extract the rotation component of the transformation matrix and returns the angle (in degrees) by which the transformation rotates the frame counterclockwise. The angle will be in range `[-180.0, 180.0]`, or `None` if the matrix is singular
+/// Extract the rotation component of the transformation matrix and
+/// returns the angle (in degrees) by which the transformation rotates
+/// the frame counterclockwise. The angle will be in range `[-180.0, 180.0]`,
+/// or `None` if the matrix is singular
+/// 
 /// # Arguments
 /// * `matrix` - The transformation matrix
 /// 
