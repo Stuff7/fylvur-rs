@@ -61,9 +61,6 @@ pub fn get_frame(
   .best(Type::Video)
   .ok_or(ffmpeg::Error::StreamNotFound)?;
   let video_stream_index = video_stream.index();
-  // ---------------------------- DEBUG -------------------------------
-  println!("--- VIDEO INFO ---\nRotation: {:?}", get_video_rotation(&video_stream));
-  // ---------------------------- DEBUG -------------------------------
 
   // Find decoder
   let context_decoder = CodecCtx::from_parameters(video_stream.parameters())?;
@@ -93,7 +90,7 @@ pub fn get_frame(
       // Decode into a video frame
       decoder.send_packet(&packet)?;
       // Receive the video frame and encode as webp
-      match encode_webp_from_decoded_frame(&mut decoder, &mut scaler) {
+      match encode_webp_from_decoded_frame(&mut decoder, &mut scaler, &stream) {
         Ok(webp_data) => {
           // Signal end of stream on encoding success
           decoder.send_eof()?;
@@ -115,31 +112,38 @@ pub fn get_frame(
   Err(VideoError::new(f!("Could not find a valid video stream in \"{video_path}\"")))
 }
 
-fn get_video_rotation(stream: &ffmpeg::Stream) -> Option<f32> {
-  if let Some(side_data) = stream.side_data()
-  .find(|tag| tag.kind() == side_data::Type::DisplayMatrix) {
-    if let Ok(matrix) = math::parse_display_matrix(side_data.data()) {
-      return math::av_display_rotation_get(matrix)
-    }
-    return None
-  }
-  None
-}
-
 fn encode_webp_from_decoded_frame(
   decoder: &mut decoder::Video,
   scaler: &mut ScalingCtx,
+  stream: &ffmpeg::Stream,
 ) -> Result<WebPMemory, ffmpeg::Error> {
   let mut decoded = Video::empty();
   loop {
     decoder.receive_frame(&mut decoded)?;
     println!("RECEIVED FRAME");
-    let mut rgb_frame = Video::empty();
-    // Convert to RGB24 pixel format
-    scaler.run(&decoded, &mut rgb_frame)?;
-    let webp_file = encode_webp_file(&rgb_frame);
-    println!("Encoded webp {webp_file:?}");
-    return Ok(webp_file)
+    let mut src_frame = Video::empty();
+    // Convert to RGBA pixel format and resize
+    scaler.run(&decoded, &mut src_frame)?;
+
+    // Check for rotation metadata
+    if let Some(side_data) = stream.side_data()
+    .find(|tag| tag.kind() == side_data::Type::DisplayMatrix) {
+      if let Ok(matrix) = math::parse_display_matrix(side_data.data()) {
+        // Create rotated empty frame
+        let mut dst_frame = Video::new(
+          Pixel::RGBA,
+          src_frame.height(),
+          src_frame.width(),
+        );
+        math::rotate_frame(
+          &mut src_frame,
+          &mut dst_frame,
+          &matrix,
+        );
+        return Ok(encode_webp_file(&dst_frame))
+      }
+    }
+    return Ok(encode_webp_file(&src_frame))
   }
 }
 
