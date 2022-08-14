@@ -39,10 +39,6 @@ pub fn av_display_rotation_get(matrix: [i32; 9]) -> Option<f32> {
 /// p' = (a * p + c * q + x) / z;
 /// q' = (b * p + d * q + y) / z;
 /// z  =  u * p + v * q + w
-/// 
-/// | a:0           b:65536    u:0          |
-/// | c:-65536      d:0        v:0          |
-/// | x:70778880    y:0        w:1073741824 |
 pub fn rotate_frame(src_frame: &mut VideoFrame, dst_frame: &mut VideoFrame, transform: &[i32; 9]) {
   let src_width = src_frame.width() as usize;
   let src_data = src_frame.data(0);
