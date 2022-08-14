@@ -29,16 +29,21 @@ pub fn av_display_rotation_get(matrix: [i32; 9]) -> Option<f32> {
   Some(-rotation)
 }
 
-/// The transformation maps a point (p, q) in the source (pre-transformation) frame
-/// to the point (p', q') in the destination (post-transformation) frame as follows:
-///             | a b u |
-/// (p, q, 1) . | c d v | = z * (p', q', 1)
-///             | x y w |
-///
+/// Rotates `src_frame` using `transform` matrix and stores it in `dst_frame`
+/// 
+/// The transformation maps a point `(p, q)` in the source (pre-transformation) frame
+/// to the point `(p', q')` in the destination (post-transformation) frame as follows:
+/// ```
+/// //             | a b u |
+/// // (p, q, 1) . | c d v | = z * (p', q', 1)
+/// //             | x y w |
+/// ```
 /// The transformation can also be more explicitly written in components as follows:
-/// p' = (a * p + c * q + x) / z;
-/// q' = (b * p + d * q + y) / z;
-/// z  =  u * p + v * q + w
+/// ```
+/// let dp = (a * p + c * q + x) / z;
+/// let dq = (b * p + d * q + y) / z;
+/// let z  =  u * p + v * q + w;
+/// ```
 pub fn rotate_frame(src_frame: &mut VideoFrame, dst_frame: &mut VideoFrame, transform: &[i32; 9]) {
   let src_width = src_frame.width() as usize;
   let src_data = src_frame.data(0);
