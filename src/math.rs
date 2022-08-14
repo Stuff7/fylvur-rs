@@ -44,6 +44,8 @@ pub fn av_display_rotation_get(matrix: [i32; 9]) -> Option<f32> {
 /// let dq = (b * p + d * q + y) / z;
 /// let z  =  u * p + v * q + w;
 /// ```
+/// 
+/// *For more info on how this works check [libav docs](https://libav.org/documentation/doxygen/master/group__lavu__video__display.html)*
 pub fn rotate_frame(src_frame: &mut VideoFrame, dst_frame: &mut VideoFrame, transform: &[i32; 9]) {
   let src_width = src_frame.width() as usize;
   let src_data = src_frame.data(0);
