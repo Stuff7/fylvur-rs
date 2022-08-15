@@ -2,6 +2,8 @@ use ffmpeg::frame::Video as VideoFrame;
 
 use crate::f;
 
+const PX_BYTES: usize = 4;
+
 /// Extract the rotation component of the transformation matrix and
 /// returns the angle (in degrees) by which the transformation rotates
 /// the frame counterclockwise. The angle will be in range `[-180.0, 180.0]`,
@@ -57,8 +59,8 @@ pub fn rotate_frame(src_frame: &VideoFrame, dst_frame: &mut VideoFrame, transfor
     x, y, w,
   ] = transform;
 
-  let img_area = src_data.len() / 4;
-  for i in 0..img_area {
+  let px_area = src_data.len() / PX_BYTES;
+  for i in 0..px_area {
     let (p, q) = (
       (i % src_width) as i32,
       (i / src_width) as i32,
@@ -69,10 +71,10 @@ pub fn rotate_frame(src_frame: &VideoFrame, dst_frame: &mut VideoFrame, transfor
     let dq = (b * p + d * q + y) / z;
     let di = (dp + dst_width as i32 * dq) as usize;
 
-    let no_overflow = di == 0 || usize::MAX / di >= 4;
-    if no_overflow && di * 4 < dst_data.len() {
-      for color_idx in 0..4 {
-        dst_data[di * 4 + color_idx] = src_data[i * 4 + color_idx];
+    let no_overflow = di == 0 || usize::MAX / di >= PX_BYTES;
+    if no_overflow && di * PX_BYTES < dst_data.len() {
+      for color_idx in 0..PX_BYTES {
+        dst_data[di * PX_BYTES + color_idx] = src_data[i * PX_BYTES + color_idx];
       }
     }
   }
@@ -93,9 +95,16 @@ pub fn parse_display_matrix(bytes: &[u8]) -> Result<[i32; 9], String> {
 
     match conversion {
       Ok(chunk) => {
+        // | 0 1 2 |
+        // | 3 4 5 |
+        // | 6 7 8 |
+        // All numbers are stored in native endianness, as 16.16 fixed-point values,
+        // except for 2, 5 and 8, which are stored as 2.30 fixed-point values.
         let value = i32::from_ne_bytes(chunk);
-        if value != 0 {
-          matrix[i] = if value > 0 {1} else {-1};
+        matrix[i] = if i == 2 || i == 5 || i == 8 {
+          to_fixed_point(value, 30)
+        } else {
+          to_fixed_point(value, 16)
         }
       }
       Err(e) => {
@@ -104,4 +113,8 @@ pub fn parse_display_matrix(bytes: &[u8]) -> Result<[i32; 9], String> {
     }
   }
   Ok(matrix)
+}
+
+fn to_fixed_point(x: i32, n: i32) -> i32 {
+  ((x as f32) / (1 << n) as f32) as i32
 }

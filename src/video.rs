@@ -165,12 +165,14 @@ fn encode_webp_from_decoded_frame(
     // Running the scaler can break images depending on the output size
     fix_img_data(&mut src_frame);
 
-    if let Some(transform) = matrix {
-      println!("MATRIX => {transform:?}");
-
+    if let Some(mut transform) = matrix {
       let (dst_width, dst_height) = if rotation.abs() == 90 {
         (src_frame.height(), src_frame.width())
       } else {(src_frame.width(), src_frame.height())};
+
+      transform[6] = dst_width as i32;
+      println!("{:?}\n{:?}\n{:?}\t{rotation}°",
+      &transform[0..3], &transform[3..6], &transform[6..9]);
 
       // Create rotated empty frame
       let mut dst_frame = Video::new(
