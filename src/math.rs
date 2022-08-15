@@ -93,17 +93,10 @@ pub fn parse_display_matrix(bytes: &[u8]) -> Result<[i32; 9], String> {
 
     match conversion {
       Ok(chunk) => {
-        // | 0 1 2 |
-        // | 3 4 5 |
-        // | 6 7 8 |
-        // All numbers are stored in native endianness, as 16.16 fixed-point values,
-        // except for 2, 5 and 8, which are stored as 2.30 fixed-point values.
-        matrix[i] = if i == 2 || i == 5 || i == 8 {
-          // Limit to 2 unsigned bytes
-          std::cmp::min(i32::from_ne_bytes(chunk), u16::MAX as i32 + 1)
-        } else {
-          i32::from_ne_bytes(chunk)
-        };
+        let value = i32::from_ne_bytes(chunk);
+        if value != 0 {
+          matrix[i] = if value > 0 {1} else {-1};
+        }
       }
       Err(e) => {
         return Err(f!("FAILED TO CONVERT {:?}\n\nErr:{e:?}", (i * 4)..(i * 4 + 4)))
