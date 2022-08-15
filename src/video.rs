@@ -162,6 +162,8 @@ fn encode_webp_from_decoded_frame(
     let mut src_frame = Video::empty();
     // Convert to RGBA pixel format and resize
     scaler.run(&decoded, &mut src_frame)?;
+    // Running the scaler can break images depending on the output size
+    fix_img_data(&mut src_frame);
 
     if let Some(transform) = matrix {
       println!("MATRIX => {transform:?}");
@@ -179,7 +181,7 @@ fn encode_webp_from_decoded_frame(
 
       let now = std::time::Instant::now();
       math::rotate_frame(
-        &mut src_frame,
+        &src_frame,
         &mut dst_frame,
         &transform,
       );
@@ -191,8 +193,7 @@ fn encode_webp_from_decoded_frame(
   }
 }
 
-fn webp_from_frame(mut frame: &mut Video) -> WebPMemory {
-  fix_img_data(&mut frame);
+fn webp_from_frame(frame: &Video) -> WebPMemory {
   let encoder = Encoder::from_rgba(
     frame.data(0),
     frame.width(),
@@ -209,7 +210,7 @@ fn fix_img_data(frame: &mut Video) {
   let width: usize = frame.width() as usize;
   let height: usize = frame.height() as usize;
   let data = frame.data_mut(0);
-  let byte_width = width * stride / width;
+  let byte_width = width * 4;
   let mut buffer = Vec::with_capacity(data.len());
 
   println!("\n\n\
@@ -225,17 +226,13 @@ fn fix_img_data(frame: &mut Video) {
     height as f32 / width as f32,
   );
 
-  let mut line = 0;
-  loop {
+  for line in 0..height {
     let begin = line * stride;
     let end = begin + byte_width;
-    if line < height || end > data.len() {
-      break
-    }
     buffer.extend_from_slice(&data[begin..end]);
-    line += byte_width;
   }
 
+  println!("BUFFER_LEN: {}\nDATA_LEN: {}", buffer.len(), data.len());
   if buffer.len() < data.len() {
     buffer.extend_from_slice(&data[buffer.len()..data.len()]);
   }
