@@ -72,25 +72,14 @@ pub fn get_frame(
   } else {
     frame_width
   };
-  // Allows to perform image rescaling and pixel format conversion
-  let mut scaler = ScalingCtx::get(
-    decoder.format(),
-    decoder.width(),
-    decoder.height(),
-    Pixel::RGBA,
-    frame_width,
-    frame_width * decoder.height() / decoder.width(),
-    Flags::BILINEAR,
-  )?;
 
   for (stream, packet) in av_format_ctx.packets() {
     // Only send packet for video streams
     if stream.index() == video_stream_index {
-      println!("Sending packet {video_stream_index}");
       // Decode into a video frame
       decoder.send_packet(&packet)?;
       // Receive the video frame and encode as webp
-      match encode_webp_from_decoded_frame(&mut decoder, &mut scaler, &stream) {
+      match encode_webp_from_decoded_frame(&mut decoder, frame_width, &stream) {
         Ok(webp_data) => {
           // Signal end of stream on encoding success
           decoder.send_eof()?;
@@ -99,9 +88,7 @@ pub fn get_frame(
           return Ok(webp_data)
         }
         Err(err) => {
-          if err == FFMPEG_RETRY_ERR {
-            println!("Resource unavailable. Sending next packet...");
-          } else {
+          if err != FFMPEG_RETRY_ERR {
             return Err(("Error receiving frame", err).into())
           }
         }
@@ -112,65 +99,147 @@ pub fn get_frame(
   Err(VideoError::new(f!("Could not find a valid video stream in \"{video_path}\"")))
 }
 
+fn get_display_matrix_values(stream: &ffmpeg::Stream) -> Result<[i32; 9], String> {
+  // Find rotation in video metadata
+  let side_data = stream.side_data().find(|tag| {
+    tag.kind() == side_data::Type::DisplayMatrix
+  }).ok_or("Could not find display matrix in side data")?;
+  // Convert bytes to i32 3x3 matrix
+  math::parse_display_matrix(side_data.data())
+}
+
+fn get_scaler_with_rotation(
+  decoder: &decoder::Video,
+  frame_width: u32,
+  rotation: i32,
+) -> Result<ScalingCtx, ffmpeg::Error> {
+  let (scaler_dst_w, scaler_dst_h) = if frame_width != decoder.width() &&
+  rotation.abs() == 90 {(
+    frame_width * decoder.width() / decoder.height(),
+    frame_width
+  )} else {(
+    frame_width,
+    frame_width * decoder.height() / decoder.width(),
+  )};
+
+  ScalingCtx::get(
+    decoder.format(),
+    decoder.width(),
+    decoder.height(),
+    Pixel::RGBA,
+    scaler_dst_w,
+    scaler_dst_h,
+    Flags::BILINEAR,
+  )
+}
+
 fn encode_webp_from_decoded_frame(
   decoder: &mut decoder::Video,
-  scaler: &mut ScalingCtx,
+  frame_width: u32,
   stream: &ffmpeg::Stream,
 ) -> Result<WebPMemory, ffmpeg::Error> {
   let mut decoded = Video::empty();
+
+  let matrix = get_display_matrix_values(&stream).ok();
+  let rotation = match matrix {
+    Some(transform) => {
+      math::av_display_rotation_get(&transform)
+      .unwrap_or_default() as i32
+    }
+    None => 0
+  };
+
+  // Allows to perform image rescaling and pixel format conversion
+  let mut scaler = get_scaler_with_rotation(
+    &decoder,
+    frame_width,
+    rotation,
+  )?;
+
   loop {
     decoder.receive_frame(&mut decoded)?;
-    println!("RECEIVED FRAME");
+
     let mut src_frame = Video::empty();
     // Convert to RGBA pixel format and resize
     scaler.run(&decoded, &mut src_frame)?;
 
-    // Check for rotation metadata
-    if let Some(side_data) = stream.side_data()
-    .find(|tag| tag.kind() == side_data::Type::DisplayMatrix) {
-      if let Ok(matrix) = math::parse_display_matrix(side_data.data()) {
-        // Create rotated empty frame
-        let mut dst_frame = Video::new(
-          src_frame.format(),
-          src_frame.height(),
-          src_frame.width(),
-        );
-        let now = std::time::Instant::now();
-        math::rotate_frame(
-          &mut src_frame,
-          &mut dst_frame,
-          &matrix,
-        );
-        println!("Rotated in {:?}", now.elapsed());
-        return Ok(encode_webp_file(&dst_frame))
-      }
+    if let Some(transform) = matrix {
+      println!("MATRIX => {transform:?}");
+
+      let (dst_width, dst_height) = if rotation.abs() == 90 {
+        (src_frame.height(), src_frame.width())
+      } else {(src_frame.width(), src_frame.height())};
+
+      // Create rotated empty frame
+      let mut dst_frame = Video::new(
+        src_frame.format(),
+        dst_width,
+        dst_height,
+      );
+
+      let now = std::time::Instant::now();
+      math::rotate_frame(
+        &mut src_frame,
+        &mut dst_frame,
+        &transform,
+      );
+      println!("Rotated in {:?}", now.elapsed());
+
+      return Ok(webp_from_frame(&mut dst_frame))
     }
-    return Ok(encode_webp_file(&src_frame))
+    return Ok(webp_from_frame(&mut src_frame))
   }
 }
 
-fn encode_webp_file(frame: &Video) -> WebPMemory {
-  let data = fix_img_padding(frame);
-  let encoder = Encoder::from_rgba(data.as_slice(), frame.width(), frame.height());
+fn webp_from_frame(mut frame: &mut Video) -> WebPMemory {
+  fix_img_data(&mut frame);
+  let encoder = Encoder::from_rgba(
+    frame.data(0),
+    frame.width(),
+    frame.height(),
+  );
   let now = std::time::Instant::now();
   let webp = encoder.encode(50.);
   println!("Encoded in {:?}", now.elapsed());
   webp
 }
 
-fn fix_img_padding(frame: &Video) -> Vec<u8> {
-  let data = frame.data(0);
-  let mut buffer = Vec::with_capacity(data.len());
+fn fix_img_data(frame: &mut Video) {
   let stride = frame.stride(0);
-  let byte_width: usize = 4 * frame.width() as usize;
+  let width: usize = frame.width() as usize;
   let height: usize = frame.height() as usize;
-  println!("{stride:?} {byte_width:?} {:?} {height:?}", frame.width());
-  for line in 0..height {
+  let data = frame.data_mut(0);
+  let byte_width = width * stride / width;
+  let mut buffer = Vec::with_capacity(data.len());
+
+  println!("\n\n\
+    STRIDE: {stride:?}\n\
+    BYTE_WIDTH: {byte_width:?}\n\
+    WIDTH: {width:?}\n\
+    HEIGHT: {height:?}\n\
+    STRIDE / WIDTH: {}\n\
+    WIDTH / HEIGHT: {}\n\
+    HEIGHT / WIDTH: {}\n",
+    stride as f32 / width as f32,
+    width as f32 / height as f32,
+    height as f32 / width as f32,
+  );
+
+  let mut line = 0;
+  loop {
     let begin = line * stride;
     let end = begin + byte_width;
+    if line < height || end > data.len() {
+      break
+    }
     buffer.extend_from_slice(&data[begin..end]);
+    line += byte_width;
   }
-  buffer
+
+  if buffer.len() < data.len() {
+    buffer.extend_from_slice(&data[buffer.len()..data.len()]);
+  }
+  data.clone_from_slice(buffer.as_slice());
 }
 
 fn seek(video_stream: &mut context::Input, seconds: u32) -> Result<(), ffmpeg::Error> {

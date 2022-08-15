@@ -11,7 +11,7 @@ use crate::f;
 /// * `matrix` - The transformation matrix
 /// 
 /// *Note: This is a translated implementation from [libavutil](https://ffmpeg.org/doxygen/trunk/display_8c_source.html#l00035)*
-pub fn av_display_rotation_get(matrix: [i32; 9]) -> Option<f32> {
+pub fn av_display_rotation_get(matrix: &[i32; 9]) -> Option<f32> {
   let mut scale = [0_f32; 2];
 
   scale[0] = f32::hypot(matrix[0] as f32, matrix[3] as f32);
@@ -57,11 +57,6 @@ pub fn rotate_frame(src_frame: &mut VideoFrame, dst_frame: &mut VideoFrame, tran
     x, y, w,
   ] = transform;
 
-  // u, v and w must be 2 bytes max
-  let u = std::cmp::min(u, &(u16::MAX as i32));
-  let v = std::cmp::min(v, &(u16::MAX as i32));
-  let w = std::cmp::min(w, &(u16::MAX as i32));
-
   let img_area = src_data.len() / 4;
   for i in 0..img_area {
     let (p, q) = (
@@ -98,7 +93,17 @@ pub fn parse_display_matrix(bytes: &[u8]) -> Result<[i32; 9], String> {
 
     match conversion {
       Ok(chunk) => {
-        matrix[i] = i32::from_ne_bytes(chunk);
+        // | 0 1 2 |
+        // | 3 4 5 |
+        // | 6 7 8 |
+        // All numbers are stored in native endianness, as 16.16 fixed-point values,
+        // except for 2, 5 and 8, which are stored as 2.30 fixed-point values.
+        matrix[i] = if i == 2 || i == 5 || i == 8 {
+          // Limit to 2 unsigned bytes
+          std::cmp::min(i32::from_ne_bytes(chunk), u16::MAX as i32 + 1)
+        } else {
+          i32::from_ne_bytes(chunk)
+        };
       }
       Err(e) => {
         return Err(f!("FAILED TO CONVERT {:?}\n\nErr:{e:?}", (i * 4)..(i * 4 + 4)))
