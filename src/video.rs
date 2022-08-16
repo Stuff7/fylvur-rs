@@ -129,7 +129,7 @@ fn get_scaler_with_rotation(
     Pixel::RGBA,
     scaler_dst_w,
     scaler_dst_h,
-    Flags::BILINEAR,
+    Flags::SINC,
   )
 }
 

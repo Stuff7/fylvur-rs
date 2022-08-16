@@ -67,12 +67,15 @@ pub fn rotate_frame(src_frame: &VideoFrame, dst_frame: &mut VideoFrame, transfor
     );
 
     let z = u * p + v * q + w;
-    let dp = (a * p + c * q + x) / z;
+    let dp = (a * p + c * q + x - 1) / z;
     let dq = (b * p + d * q + y) / z;
     let di = (dp + dst_width as i32 * dq) as usize;
 
-    let no_overflow = di == 0 || usize::MAX / di >= PX_BYTES;
-    if no_overflow && di * PX_BYTES < dst_data.len() {
+    // Break on usize overflow
+    if di != 0 && usize::MAX / di <= PX_BYTES {
+      break
+    }
+    if di * PX_BYTES < dst_data.len() {
       for color_idx in 0..PX_BYTES {
         dst_data[di * PX_BYTES + color_idx] = src_data[i * PX_BYTES + color_idx];
       }
