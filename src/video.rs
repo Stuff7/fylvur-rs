@@ -115,11 +115,11 @@ fn get_scaler_with_rotation(
 ) -> Result<ScalingCtx, ffmpeg::Error> {
   let (scaler_dst_w, scaler_dst_h) = if frame_width != decoder.width() &&
   rotation.abs() == 90 {(
-    frame_width * decoder.width() / decoder.height(),
+    frame_width * decoder.width() / decoder.height() + 1,
     frame_width
   )} else {(
     frame_width,
-    frame_width * decoder.height() / decoder.width(),
+    frame_width * decoder.height() / decoder.width() + 1,
   )};
 
   ScalingCtx::get(
