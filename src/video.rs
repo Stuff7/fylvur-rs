@@ -119,7 +119,7 @@ fn get_scaler_with_rotation(
     frame_width
   )} else {(
     frame_width,
-    frame_width * decoder.height() / decoder.width() + 1,
+    frame_width * decoder.height() / decoder.width(),
   )};
 
   ScalingCtx::get(
