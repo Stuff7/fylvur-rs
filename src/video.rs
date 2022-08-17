@@ -170,8 +170,8 @@ fn encode_webp_from_decoded_frame(
         (src_frame.height(), src_frame.width())
       } else {(src_frame.width(), src_frame.height())};
 
-      // transform at(0, 2) indicates the width must be updated since the scaler
-      // doesn't update it and is required to rotate the image
+      // Transform matrix (0, 2) indicates the width. It must be updated after scaling
+      // as it is required to rotate the image correctly
       transform[6] = dst_width as i32;
 
       // Create rotated empty frame
