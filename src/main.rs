@@ -36,9 +36,12 @@ async fn get_video_thumbnail(
   query: web::Query<ThumbnailRequest>,
 ) -> impl Responder {
   let static_path = std::path::Path::new(STATIC_FOLDER);
+
   if let Some(video_path) = static_path.join(&path.video_path).to_str() {
     use video::SeekTime::*;
+
     let seek = query.seek.unwrap_or(0.);
+
     return match video::get_frame(
       video_path.to_string(),
       query.width.unwrap_or_default(),
@@ -51,6 +54,7 @@ async fn get_video_thumbnail(
         .body(f!("Could not get thumbnail - {err:?}"))
     }
   }
+
   HttpResponse::BadRequest()
   .body("Invalid path")
 }
