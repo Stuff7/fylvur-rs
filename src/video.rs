@@ -46,14 +46,14 @@ pub fn init() -> Result<(), ffmpeg::Error> {
 pub fn get_frame(
   video_path: String,
   frame_width: u32,
-  frame_time: u32,
+  frame_time: SeekTime,
 ) -> Result<WebPMemory, VideoError> {
   let mut av_format_ctx = match input(&video_path) {
     Ok(av_format_ctx) => av_format_ctx,
     Err(err) => return Err((f!("Could not open file \"{video_path}\""), err).into())
   };
-  if let Err(err) = seek(&mut av_format_ctx, frame_time) {
-    return Err((f!("Failed to seek to {frame_time} in \"{video_path}\""), err).into())
+  if let Err(err) = seek(&mut av_format_ctx, &frame_time) {
+    return Err((f!("Failed to seek to {frame_time:?} in \"{video_path}\""), err).into())
   }
 
   let video_stream = av_format_ctx
@@ -170,9 +170,9 @@ fn encode_webp_from_decoded_frame(
         (src_frame.height(), src_frame.width())
       } else {(src_frame.width(), src_frame.height())};
 
+      // transform at(0, 2) indicates the width must be updated since the scaler
+      // doesn't update it and is required to rotate the image
       transform[6] = dst_width as i32;
-      println!("{:?}\n{:?}\n{:?}\t{rotation}°",
-      &transform[0..3], &transform[3..6], &transform[6..9]);
 
       // Create rotated empty frame
       let mut dst_frame = Video::new(
@@ -181,13 +181,11 @@ fn encode_webp_from_decoded_frame(
         dst_height,
       );
 
-      let now = std::time::Instant::now();
       math::rotate_frame(
         &src_frame,
         &mut dst_frame,
         &transform,
       );
-      println!("Rotated in {:?}", now.elapsed());
 
       return Ok(webp_from_frame(&mut dst_frame))
     }
@@ -201,9 +199,7 @@ fn webp_from_frame(frame: &Video) -> WebPMemory {
     frame.width(),
     frame.height(),
   );
-  let now = std::time::Instant::now();
   let webp = encoder.encode(50.);
-  println!("Encoded in {:?}", now.elapsed());
   webp
 }
 
@@ -215,35 +211,41 @@ fn fix_img_data(frame: &mut Video) {
   let byte_width = width * 4;
   let mut buffer = Vec::with_capacity(data.len());
 
-  println!("\n\n\
-    STRIDE: {stride:?}\n\
-    BYTE_WIDTH: {byte_width:?}\n\
-    WIDTH: {width:?}\n\
-    HEIGHT: {height:?}\n\
-    STRIDE / WIDTH: {}\n\
-    WIDTH / HEIGHT: {}\n\
-    HEIGHT / WIDTH: {}\n",
-    stride as f32 / width as f32,
-    width as f32 / height as f32,
-    height as f32 / width as f32,
-  );
-
   for line in 0..height {
     let begin = line * stride;
     let end = begin + byte_width;
     buffer.extend_from_slice(&data[begin..end]);
   }
 
-  println!("BUFFER_LEN: {}\nDATA_LEN: {}", buffer.len(), data.len());
   if buffer.len() < data.len() {
     buffer.extend_from_slice(&data[buffer.len()..data.len()]);
   }
   data.clone_from_slice(buffer.as_slice());
 }
 
-fn seek(video_stream: &mut context::Input, seconds: u32) -> Result<(), ffmpeg::Error> {
+fn seek(
+  mut video_stream: &mut context::Input,
+  seek_time: &SeekTime,
+) -> Result<(), ffmpeg::Error> {
+  match seek_time {
+    SeekTime::Seconds(seconds) => seek_seconds(&mut video_stream, *seconds),
+    SeekTime::Percentage(percentage) => {
+      let duration = video_stream.duration();
+      let position = (percentage * duration as f32) as i64;
+      video_stream.seek(position, ..position)
+    }
+  }
+}
+
+fn seek_seconds(video_stream: &mut context::Input, seconds: u32) -> Result<(), ffmpeg::Error> {
   let position = seconds.rescale((1, 1), rescale::TIME_BASE);
   video_stream.seek(position, ..position)
+}
+
+#[derive(Debug)]
+pub enum SeekTime {
+  Seconds(u32),
+  Percentage(f32),
 }
 
 #[derive(Debug)]
