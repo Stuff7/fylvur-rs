@@ -44,11 +44,11 @@ pub fn init() -> Result<(), ffmpeg::Error> {
 /// std::fs::write(&output_path, &*thumbnail).expect("Could not save thumbnail");
 /// ```
 pub fn get_frame(
-  video_path: String,
+  video_path: &String,
   frame_width: u32,
   frame_time: SeekTime,
 ) -> Result<WebPMemory, VideoError> {
-  let mut av_format_ctx = match input(&video_path) {
+  let mut av_format_ctx = match input(video_path) {
     Ok(av_format_ctx) => av_format_ctx,
     Err(err) => return Err((f!("Could not open file \"{video_path}\""), err).into())
   };
@@ -113,6 +113,7 @@ fn get_scaler_with_rotation(
   frame_width: u32,
   rotation: i32,
 ) -> Result<ScalingCtx, ffmpeg::Error> {
+  println!("ROTATION {rotation}");
   let (scaler_dst_w, scaler_dst_h) = if frame_width != decoder.width() &&
   rotation.abs() == 90 {(
     frame_width * decoder.width() / decoder.height() + 1,
@@ -240,6 +241,20 @@ fn seek(
 fn seek_seconds(video_stream: &mut context::Input, seconds: u32) -> Result<(), ffmpeg::Error> {
   let position = seconds.rescale((1, 1), rescale::TIME_BASE);
   video_stream.seek(position, ..position)
+}
+
+pub fn get_duration(video_path: &String) -> Result<i64, VideoError> {
+  let av_format_ctx = match input(video_path) {
+    Ok(av_format_ctx) => av_format_ctx,
+    Err(err) => return Err((f!("Could not open file \"{video_path}\""), err).into())
+  };
+
+  let duration_ms = {
+    let time_base = ffmpeg::rescale::TIME_BASE.0 as f32 / ffmpeg::rescale::TIME_BASE.1 as f32;
+    (av_format_ctx.duration() as f32 * time_base * 1000.) as i64
+  };
+
+  Ok(duration_ms)
 }
 
 #[derive(Debug)]
