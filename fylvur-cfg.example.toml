@@ -1,0 +1,3 @@
+media_folder = "/path/to/media/folder"
+host = "0.0.0.0"
+port = 80

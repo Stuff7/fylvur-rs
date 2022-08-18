@@ -173,7 +173,11 @@ fn encode_webp_from_decoded_frame(
 
       // Transform matrix (0, 2) indicates the width. It must be updated after scaling
       // as it is required to rotate the image correctly
-      transform[6] = dst_width as i32;
+      transform[6] = dst_width as i32 - 1;
+      // Need to do the same with the height for 180° rotation
+      if rotation.abs() == 180 {
+        transform[7] = dst_height as i32 - 1;
+      }
 
       // Create rotated empty frame
       let mut dst_frame = Video::new(

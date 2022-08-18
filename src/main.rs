@@ -10,8 +10,7 @@ use serde::Deserialize;
 use actix_files as actix_fs;
 use actix_web::{get, web, App, HttpResponse, HttpServer, Responder};
 
-const HOST: &str = "127.0.0.1";
-const PORT: u16 = 80;
+include!(concat!(env!("OUT_DIR"), "/config.rs"));
 
 #[derive(Debug, Deserialize)]
 pub struct ThumbnailRequest {
@@ -71,13 +70,13 @@ async fn main() -> std::io::Result<()> {
     App::new()
       .service(get_video_thumbnail)
       .service(get_folder_info)
-      .service(actix_fs::Files::new("/file", file::STATIC_FOLDER))
+      .service(actix_fs::Files::new("/file", MEDIA_FOLDER))
       .service(actix_fs::Files::new("/static", "./public"))
       .service(index)
   })
   .bind((HOST, PORT))?
   .run();
 
-  println!("Listening in http://{HOST}:{PORT}");
+  println!("Listening in http://{}:{}", HOST, PORT);
   server.await
 }

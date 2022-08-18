@@ -1,12 +1,10 @@
 use serde::Serialize;
 use actix_files as actix_fs;
 
-use crate::{f, video};
-
-pub const STATIC_FOLDER: &str = r#"D:\images\Screenshots"#;
+use crate::{f, video, MEDIA_FOLDER};
 
 pub fn get_static_path(path: &String) -> String {
-  let static_path = std::path::Path::new(STATIC_FOLDER);
+  let static_path = std::path::Path::new(&MEDIA_FOLDER);
   match static_path.join(path).to_str() {
     Some(static_path) => static_path.to_string(),
     None => String::new(),
