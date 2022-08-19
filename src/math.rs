@@ -59,8 +59,10 @@ pub fn rotate_frame(src_frame: &VideoFrame, dst_frame: &mut VideoFrame, transfor
     x, y, w,
   ] = transform;
 
-  let px_area = src_data.len() / PX_BYTES;
-  for i in 0..px_area {
+  let px_area = src_data.len();
+  let mut i_bytes = 0;
+  let mut i = 0;
+  while i_bytes < px_area {
     let (p, q) = (
       (i % src_width) as i32,
       (i / src_width) as i32,
@@ -71,15 +73,13 @@ pub fn rotate_frame(src_frame: &VideoFrame, dst_frame: &mut VideoFrame, transfor
     let dq = (b * p + d * q + y) / z;
     let di = (dp + dst_width as i32 * dq) as usize;
 
-    // Break on usize overflow
-    if di != 0 && usize::MAX / di <= PX_BYTES {
-      break
-    }
     if di * PX_BYTES < dst_data.len() {
       for color_idx in 0..PX_BYTES {
-        dst_data[di * PX_BYTES + color_idx] = src_data[i * PX_BYTES + color_idx];
+        dst_data[di * PX_BYTES + color_idx] = src_data[i_bytes + color_idx];
       }
     }
+    i += 1;
+    i_bytes += PX_BYTES;
   }
 }
 

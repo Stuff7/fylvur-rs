@@ -139,6 +139,7 @@ fn encode_webp_from_decoded_frame(
   stream: &ffmpeg::Stream,
 ) -> Result<WebPMemory, ffmpeg::Error> {
   let mut decoded = Video::empty();
+  decoder.receive_frame(&mut decoded)?;
 
   let matrix = get_display_matrix_values(&stream).ok();
   let rotation = match matrix {
@@ -156,45 +157,45 @@ fn encode_webp_from_decoded_frame(
     rotation,
   )?;
 
-  loop {
-    decoder.receive_frame(&mut decoded)?;
+  let mut src_frame = Video::empty();
+  // Convert to RGBA pixel format and resize
+  scaler.run(&decoded, &mut src_frame)?;
+  // Running the scaler can break images depending on the output size
+  fix_img_data(&mut src_frame);
 
-    let mut src_frame = Video::empty();
-    // Convert to RGBA pixel format and resize
-    scaler.run(&decoded, &mut src_frame)?;
-    // Running the scaler can break images depending on the output size
-    fix_img_data(&mut src_frame);
+  if let Some(mut transform) = matrix {
+    let (dst_width, dst_height) = if rotation.abs() == 90 {
+      (src_frame.height(), src_frame.width())
+    } else {(src_frame.width(), src_frame.height())};
 
-    if let Some(mut transform) = matrix {
-      let (dst_width, dst_height) = if rotation.abs() == 90 {
-        (src_frame.height(), src_frame.width())
-      } else {(src_frame.width(), src_frame.height())};
-
-      // Transform matrix (0, 2) indicates the width. It must be updated after scaling
-      // as it is required to rotate the image correctly
+    // |a b c|
+    // |d e f|
+    // |g h i|
+    // h and g in the transform matrix indicate the width and height respectively.
+    // It must be updated after scaling as it is required to rotate the image correctly
+    if transform[6] != 0 {
       transform[6] = dst_width as i32 - 1;
-      // Need to do the same with the height for 180° rotation
-      if rotation.abs() == 180 {
-        transform[7] = dst_height as i32 - 1;
-      }
-
-      // Create rotated empty frame
-      let mut dst_frame = Video::new(
-        src_frame.format(),
-        dst_width,
-        dst_height,
-      );
-
-      math::rotate_frame(
-        &src_frame,
-        &mut dst_frame,
-        &transform,
-      );
-
-      return Ok(webp_from_frame(&mut dst_frame))
     }
-    return Ok(webp_from_frame(&mut src_frame))
+    if transform[7] != 0 {
+      transform[7] = dst_height as i32 - 1;
+    }
+
+    // Create rotated empty frame
+    let mut dst_frame = Video::new(
+      src_frame.format(),
+      dst_width,
+      dst_height,
+    );
+
+    math::rotate_frame(
+      &src_frame,
+      &mut dst_frame,
+      &transform,
+    );
+
+    return Ok(webp_from_frame(&mut dst_frame))
   }
+  return Ok(webp_from_frame(&mut src_frame))
 }
 
 fn webp_from_frame(frame: &Video) -> WebPMemory {
