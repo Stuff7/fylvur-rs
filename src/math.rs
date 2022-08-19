@@ -50,6 +50,7 @@ pub fn av_display_rotation_get(matrix: &[i32; 9]) -> Option<f32> {
 /// *For more info on how this works check [libav docs](https://libav.org/documentation/doxygen/master/group__lavu__video__display.html)*
 pub fn rotate_frame(src_frame: &VideoFrame, dst_frame: &mut VideoFrame, transform: &[i32; 9]) {
   let src_width = src_frame.width() as usize;
+  let src_height = src_frame.height() as usize;
   let src_data = src_frame.data(0);
   let dst_width = dst_frame.width() as usize;
   let dst_data = dst_frame.data_mut(0);
@@ -59,10 +60,8 @@ pub fn rotate_frame(src_frame: &VideoFrame, dst_frame: &mut VideoFrame, transfor
     x, y, w,
   ] = transform;
 
-  let px_area = src_data.len();
-  let mut i_bytes = 0;
-  let mut i = 0;
-  while i_bytes < px_area {
+  let px_area = src_width * src_height;
+  for i in 0..px_area {
     let (p, q) = (
       (i % src_width) as i32,
       (i / src_width) as i32,
@@ -71,15 +70,13 @@ pub fn rotate_frame(src_frame: &VideoFrame, dst_frame: &mut VideoFrame, transfor
     let z = u * p + v * q + w;
     let dp = (a * p + c * q + x) / z;
     let dq = (b * p + d * q + y) / z;
-    let di = (dp + dst_width as i32 * dq) as usize;
+    let di = (dp + dst_width as i32 * dq) as usize * PX_BYTES;
 
-    if di * PX_BYTES < dst_data.len() {
+    if di < dst_data.len() {
       for color_idx in 0..PX_BYTES {
-        dst_data[di * PX_BYTES + color_idx] = src_data[i_bytes + color_idx];
+        dst_data[di + color_idx] = src_data[i * PX_BYTES + color_idx];
       }
     }
-    i += 1;
-    i_bytes += PX_BYTES;
   }
 }
 
