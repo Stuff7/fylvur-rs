@@ -23,15 +23,28 @@ async fn index() -> impl Responder {
   actix_fs::NamedFile::open_async("./public/index.html").await
 }
 
-#[get("/api/folder/{video_path:.*}")]
+#[get("/api/file/{video_path:.*}")]
 async fn get_folder_info(
   path: web::Path<String>,
 ) -> impl Responder {
-  if let Ok(paths) = file::get_folder_contents(&path.into_inner()) {
+  let path = &path.into_inner();
+  if let Ok(paths) = file::get_folder_contents(path) {
     return HttpResponse::Ok().json(paths)
   }
+  if let Ok(file) = file::FileInfo::from_path(&file::get_media_path(path)) {
+    return HttpResponse::Ok().json(file)
+  }
+  HttpResponse::NotFound().json(file::FileInfo::default())
+}
 
-  HttpResponse::BadRequest().body("Invalid path")
+#[get("/api/file-metadata/{path:.*}")]
+async fn get_file_metadata(
+  path: web::Path<String>,
+) -> impl Responder {
+  let path = &path.into_inner();
+  HttpResponse::Ok().json(
+    file::FileMetadata::from_path(&file::get_media_path(path))
+  )
 }
 
 #[get("/api/thumbnail/{video_path:.*}")]
@@ -41,7 +54,8 @@ async fn get_video_thumbnail(
 ) -> impl Responder {
   use video::SeekTime::*;
 
-  let video_path = file::get_static_path(&path.into_inner());
+  let video_path = file::get_media_path(&path.into_inner());
+  let video_path = video_path.to_str().unwrap_or_default();
 
   let seek = query.seek.unwrap_or(0.);
 
@@ -70,6 +84,7 @@ async fn main() -> std::io::Result<()> {
     App::new()
       .service(get_video_thumbnail)
       .service(get_folder_info)
+      .service(get_file_metadata)
       .service(actix_fs::Files::new("/file", MEDIA_FOLDER))
       .service(actix_fs::Files::new("/static", "./public"))
       .service(index)
