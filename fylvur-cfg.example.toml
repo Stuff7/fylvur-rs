@@ -1,3 +1,4 @@
-media_folder = "/path/to/media/folder"
+public_folder = "/path/to/public/folder" # HTML/CSS/JS etc..
+media_folder = "/path/to/media/folder" # Static files
 host = "0.0.0.0"
 port = 80

@@ -10,10 +10,12 @@ fn main() {
   std::fs::write(
     &path,
     format!("\
+    const PUBLIC_FOLDER: &str = {public_folder:?};\
     const MEDIA_FOLDER: &str = {media_folder:?};\
     const HOST: &str = {host:?};\
     const PORT: u16 = {port:?};\
     ",
+    public_folder = cfg.public_folder,
     media_folder = cfg.media_folder,
     host = cfg.host,
     port = cfg.port,
@@ -23,6 +25,7 @@ fn main() {
 
 #[derive(Debug, Deserialize)]
 pub struct Config {
+  pub public_folder: String,
   pub media_folder: String,
   pub host: String,
   pub port: u16,

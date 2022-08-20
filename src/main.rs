@@ -10,6 +10,8 @@ use serde::Deserialize;
 use actix_files as actix_fs;
 use actix_web::{get, web, App, HttpResponse, HttpServer, Responder};
 
+use std::path::Path;
+
 include!(concat!(env!("OUT_DIR"), "/config.rs"));
 
 #[derive(Debug, Deserialize)]
@@ -20,7 +22,7 @@ pub struct ThumbnailRequest {
 
 #[get("/{any:.*}")]
 async fn index() -> impl Responder {
-  actix_fs::NamedFile::open_async("./public/index.html").await
+  actix_fs::NamedFile::open_async(Path::new(PUBLIC_FOLDER).join("index.html")).await
 }
 
 #[get("/api/file/{video_path:.*}")]
@@ -77,16 +79,13 @@ async fn main() -> std::io::Result<()> {
   video::init()
   .expect("Could not initialize video API");
 
-  std::fs::create_dir_all("./frames")
-  .expect("Could not create frames folder");
-
   let server = HttpServer::new(|| {
     App::new()
       .service(get_video_thumbnail)
       .service(get_folder_info)
       .service(get_file_metadata)
       .service(actix_fs::Files::new("/file", MEDIA_FOLDER))
-      .service(actix_fs::Files::new("/static", "./public"))
+      .service(actix_fs::Files::new("/static", PUBLIC_FOLDER))
       .service(index)
   })
   .bind((HOST, PORT))?
