@@ -20,6 +20,11 @@ pub struct ThumbnailRequest {
   seek: Option<f32>,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct AtlasRequest {
+  seek: Option<u32>,
+}
+
 #[get("/{any:.*}")]
 async fn index() -> impl Responder {
   actix_fs::NamedFile::open_async(Path::new(PUBLIC_FOLDER).join("index.html")).await
@@ -74,6 +79,28 @@ async fn get_video_thumbnail(
   }
 }
 
+#[get("/api/atlas/{video_path:.*}")]
+async fn get_video_atlas(
+  path: web::Path<String>,
+  query: web::Query<AtlasRequest>,
+) -> impl Responder {
+  let video_path = file::get_media_path(&path.into_inner());
+  let video_path = video_path.to_str().unwrap_or_default();
+
+  let seek = query.seek.unwrap_or(0);
+
+  match video::get_video_atlas(
+    &video_path.to_string(),
+    seek,
+  ) {
+    Ok(atlas) => HttpResponse::Ok()
+      .content_type("image/webp")
+      .body(web::Bytes::copy_from_slice(&*atlas)),
+    Err(err) => HttpResponse::BadRequest()
+      .body(f!("Could not get video atlas - {err:?}"))
+  }
+}
+
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
   video::init()
@@ -84,6 +111,7 @@ async fn main() -> std::io::Result<()> {
       .service(get_video_thumbnail)
       .service(get_folder_info)
       .service(get_file_metadata)
+      .service(get_video_atlas)
       .service(actix_fs::Files::new("/file", MEDIA_FOLDER))
       .service(actix_fs::Files::new("/static", PUBLIC_FOLDER))
       .service(index)
