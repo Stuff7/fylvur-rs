@@ -32,7 +32,7 @@ pub struct FileMetadata {
 
 impl FileMetadata {
   pub fn from_path(path: &path::PathBuf) -> Self {
-    let duration_ms = video::get_duration(
+    let duration_ms = video::get_duration_from_path(
       &path.to_str().unwrap_or_default().to_string()
     ).unwrap_or_default();
     Self { duration_ms }

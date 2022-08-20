@@ -61,7 +61,7 @@ async fn get_video_thumbnail(
 
   let seek = query.seek.unwrap_or(0.);
 
-  match video::get_frame(
+  match video::get_video_thumbnail(
     &video_path.to_string(),
     query.width.unwrap_or_default(),
     if seek < 1. {Percentage(seek)} else {Seconds(seek as u32)},

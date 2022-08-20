@@ -7,11 +7,12 @@ use ffmpeg::Rescale;
 use ffmpeg::rescale;
 use ffmpeg::codec::context::Context as CodecCtx;
 use ffmpeg::decoder;
-use ffmpeg::format::{context, input, Pixel};
+use ffmpeg::format;
+use ffmpeg::format::context::Input as AVFormatContext;
 use ffmpeg::packet::side_data;
 use ffmpeg::media::Type;
 use ffmpeg::software::scaling::{context::Context as ScalingCtx, flag::Flags};
-use ffmpeg::util::frame::video::Video;
+use ffmpeg::util::frame::video::Video as VideoFrame;
 use webp::Encoder;
 use webp::WebPMemory;
 
@@ -32,7 +33,7 @@ pub fn init() -> Result<(), ffmpeg::Error> {
 /// 
 /// # Examples
 /// Saving webp file to disk
-/// ```
+/// ```ignore
 /// let thumbnail = video::get_frame(
 /// String::from("/path/to/video/file"),
 /// 0, // Use the video's width
@@ -43,17 +44,30 @@ pub fn init() -> Result<(), ffmpeg::Error> {
 /// 
 /// std::fs::write(&output_path, &*thumbnail).expect("Could not save thumbnail");
 /// ```
-pub fn get_frame(
+pub fn get_video_thumbnail(
   video_path: &String,
-  frame_width: u32,
-  frame_time: SeekTime,
+  thumbnail_width: u32,
+  time_position: SeekTime,
 ) -> Result<WebPMemory, VideoError> {
-  let mut av_format_ctx = match input(video_path) {
+  let mut av_format_ctx = match format::input(video_path) {
     Ok(av_format_ctx) => av_format_ctx,
     Err(err) => return Err((f!("Could not open file \"{video_path}\""), err).into())
   };
+  let frame = get_frame(
+    &mut av_format_ctx,
+    thumbnail_width,
+    time_position,
+  )?;
+  Ok(encode_webp_from_frame(&frame))
+}
+
+pub fn get_frame(
+  mut av_format_ctx: &mut AVFormatContext,
+  frame_width: u32,
+  frame_time: SeekTime,
+) -> Result<VideoFrame, VideoError> {
   if let Err(err) = seek(&mut av_format_ctx, &frame_time) {
-    return Err((f!("Failed to seek to {frame_time:?} in \"{video_path}\""), err).into())
+    return Err((f!("Failed to seek to {frame_time:?}"), err).into())
   }
 
   let video_stream = av_format_ctx
@@ -79,13 +93,13 @@ pub fn get_frame(
       // Decode into a video frame
       decoder.send_packet(&packet)?;
       // Receive the video frame and encode as webp
-      match encode_webp_from_decoded_frame(&mut decoder, frame_width, &stream) {
-        Ok(webp_data) => {
+      match decode_frame(&mut decoder, frame_width, &stream) {
+        Ok(frame) => {
           // Signal end of stream on encoding success
           decoder.send_eof()?;
           // Receive all the frames for the eof signal
-          while decoder.receive_frame(&mut Video::empty()).is_ok() {}
-          return Ok(webp_data)
+          while decoder.receive_frame(&mut VideoFrame::empty()).is_ok() {}
+          return Ok(frame)
         }
         Err(err) => {
           if err != FFMPEG_RETRY_ERR {
@@ -96,7 +110,7 @@ pub fn get_frame(
     }
   }
 
-  Err(VideoError::new(f!("Could not find a valid video stream in \"{video_path}\"")))
+  Err(VideoError::new("Could not find a valid video stream"))
 }
 
 fn get_display_matrix_values(stream: &ffmpeg::Stream) -> Result<[i32; 9], String> {
@@ -126,19 +140,19 @@ fn get_scaler_with_rotation(
     decoder.format(),
     decoder.width(),
     decoder.height(),
-    Pixel::RGBA,
+    format::Pixel::RGBA,
     scaler_dst_w,
     scaler_dst_h,
     Flags::SINC,
   )
 }
 
-fn encode_webp_from_decoded_frame(
+fn decode_frame(
   decoder: &mut decoder::Video,
   frame_width: u32,
   stream: &ffmpeg::Stream,
-) -> Result<WebPMemory, ffmpeg::Error> {
-  let mut decoded = Video::empty();
+) -> Result<VideoFrame, ffmpeg::Error> {
+  let mut decoded = VideoFrame::empty();
   decoder.receive_frame(&mut decoded)?;
 
   let matrix = get_display_matrix_values(&stream).ok();
@@ -157,7 +171,7 @@ fn encode_webp_from_decoded_frame(
     rotation,
   )?;
 
-  let mut src_frame = Video::empty();
+  let mut src_frame = VideoFrame::empty();
   // Convert to RGBA pixel format and resize
   scaler.run(&decoded, &mut src_frame)?;
   // Running the scaler can break images depending on the output size
@@ -181,7 +195,7 @@ fn encode_webp_from_decoded_frame(
     }
 
     // Create rotated empty frame
-    let mut dst_frame = Video::new(
+    let mut dst_frame = VideoFrame::new(
       src_frame.format(),
       dst_width,
       dst_height,
@@ -193,12 +207,12 @@ fn encode_webp_from_decoded_frame(
       &transform,
     );
 
-    return Ok(webp_from_frame(&mut dst_frame))
+    return Ok(dst_frame)
   }
-  return Ok(webp_from_frame(&mut src_frame))
+  return Ok(src_frame)
 }
 
-fn webp_from_frame(frame: &Video) -> WebPMemory {
+fn encode_webp_from_frame(frame: &VideoFrame) -> WebPMemory {
   let encoder = Encoder::from_rgba(
     frame.data(0),
     frame.width(),
@@ -208,7 +222,7 @@ fn webp_from_frame(frame: &Video) -> WebPMemory {
   webp
 }
 
-fn fix_img_data(frame: &mut Video) {
+fn fix_img_data(frame: &mut VideoFrame) {
   let stride = frame.stride(0);
   let width: usize = frame.width() as usize;
   let height: usize = frame.height() as usize;
@@ -229,7 +243,7 @@ fn fix_img_data(frame: &mut Video) {
 }
 
 fn seek(
-  mut video_stream: &mut context::Input,
+  mut video_stream: &mut AVFormatContext,
   seek_time: &SeekTime,
 ) -> Result<(), ffmpeg::Error> {
   match seek_time {
@@ -242,23 +256,23 @@ fn seek(
   }
 }
 
-fn seek_seconds(video_stream: &mut context::Input, seconds: u32) -> Result<(), ffmpeg::Error> {
+fn seek_seconds(video_stream: &mut AVFormatContext, seconds: u32) -> Result<(), ffmpeg::Error> {
   let position = seconds.rescale((1, 1), rescale::TIME_BASE);
   video_stream.seek(position, ..position)
 }
 
-pub fn get_duration(video_path: &String) -> Result<i64, VideoError> {
-  let av_format_ctx = match input(video_path) {
+pub fn get_duration_from_path(video_path: &String) -> Result<i64, VideoError> {
+  let av_format_ctx = match format::input(video_path) {
     Ok(av_format_ctx) => av_format_ctx,
     Err(err) => return Err((f!("Could not open file \"{video_path}\""), err).into())
   };
 
-  let duration_ms = {
-    let time_base = ffmpeg::rescale::TIME_BASE.0 as f32 / ffmpeg::rescale::TIME_BASE.1 as f32;
-    (av_format_ctx.duration() as f32 * time_base * 1000.) as i64
-  };
+  Ok(get_duration(&av_format_ctx))
+}
 
-  Ok(duration_ms)
+pub fn get_duration(av_format_ctx: &AVFormatContext) -> i64 {
+  let time_base = ffmpeg::rescale::TIME_BASE.0 as f32 / ffmpeg::rescale::TIME_BASE.1 as f32;
+  (av_format_ctx.duration() as f32 * time_base * 1000.) as i64
 }
 
 #[derive(Debug)]
