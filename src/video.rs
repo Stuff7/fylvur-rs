@@ -187,21 +187,30 @@ pub fn get_frame(
     max_height,
   )?;
   let mut frames = Vec::new();
+  let fps = video_stream.avg_frame_rate();
+  let fps = fps.0 as u32 / fps.1 as u32;
+  let mut frame_i = fps;
 
   for (stream, packet) in av_format_ctx.packets() {
     // Only send packet for video streams
     if stream.index() == video_stream_index {
       // Decode into a video frame
-      decoder.send_packet(&packet)?;
+      if let Err(err) = decoder.send_packet(&packet) {
+        if err != FFMPEG_RETRY_ERR {
+          return Err(("Error receiving frame", err).into())
+        }
+      }
+      if frame_i < fps {
+        decoder.skip_frame(ffmpeg::Discard::NonIntra);
+        frame_i += 1;
+        continue
+      }
+      frame_i = 0;
       // Receive the video frame and encode as webp
       match decode_frame(&mut decoder, matrix, rotation, &mut scaler) {
         Ok(frame) => {
           if frames.len() == frame_count {
-            // Signal end of stream on encoding success
-            decoder.send_eof()?;
-            // Receive all the frames for the eof signal
-            while decoder.receive_frame(&mut VideoFrame::empty()).is_ok() {}
-            return Ok(frames)
+            break
           }
           frames.push(frame);
         }
@@ -214,7 +223,11 @@ pub fn get_frame(
     }
   }
 
-  Err(VideoError::new("Could not find a valid video stream"))
+  // Signal end of stream on encoding success
+  decoder.send_eof()?;
+  // Receive all the frames for the eof signal
+  while decoder.receive_frame(&mut VideoFrame::empty()).is_ok() {}
+  Ok(frames)
 }
 
 fn get_display_matrix_values(stream: &ffmpeg::Stream) -> Result<[i32; 9], String> {
@@ -388,12 +401,6 @@ pub enum SeekTime {
 #[derive(Debug)]
 pub struct VideoError {
   message: String,
-}
-
-impl VideoError {
-  fn new<T: ToString>(message: T) -> Self {
-    Self { message: message.to_string() }
-  }
 }
 
 impl Display for VideoError {
