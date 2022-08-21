@@ -64,14 +64,14 @@ pub fn get_video_atlas(
 
   let mut thumb_pos = 0;
 
-  for frame_time in tile_index_start..tile_index_end {
-    let frame = get_frame(
-      &mut av_format_ctx,
-      ATLAS_TILE_WIDTH as u32,
-      SeekTime::Seconds(frame_time),
-      Some(ATLAS_TILE_HEIGHT as u32),
-    )?;
-
+  let frames = get_frame(
+    &mut av_format_ctx,
+    ATLAS_TILE_WIDTH as u32,
+    SeekTime::Seconds(tile_index_start),
+    tile_index_end as usize - tile_index_start as usize,
+    Some(ATLAS_TILE_HEIGHT as u32),
+  )?;
+  for frame in frames {
     let frame_width = frame.width() as usize;
     let frame_height = frame.height() as usize;
     // Center image in tile when width/height is too small
@@ -138,17 +138,19 @@ pub fn get_video_thumbnail(
     &mut av_format_ctx,
     thumbnail_width,
     time_position,
+    1,
     None,
   )?;
-  Ok(encode_webp_from_frame(&frame))
+  Ok(encode_webp_from_frame(&frame[0]))
 }
 
 pub fn get_frame(
   mut av_format_ctx: &mut AVFormatContext,
   frame_width: u32,
   frame_time: SeekTime,
+  frame_count: usize,
   max_height: Option<u32>,
-) -> Result<VideoFrame, VideoError> {
+) -> Result<Vec<VideoFrame>, VideoError> {
   if let Err(err) = seek(&mut av_format_ctx, &frame_time) {
     return Err((f!("Failed to seek to {frame_time:?}"), err).into())
   }
@@ -170,19 +172,40 @@ pub fn get_frame(
     frame_width
   };
 
+  let matrix = get_display_matrix_values(&video_stream).ok();
+  let rotation = match matrix {
+    Some(transform) => {
+      math::av_display_rotation_get(&transform)
+      .unwrap_or_default() as i32
+    }
+    None => 0
+  };
+
+  // Allows to perform image rescaling and pixel format conversion
+  let mut scaler = get_scaler(
+    &decoder,
+    frame_width,
+    rotation,
+    max_height,
+  )?;
+  let mut frames = Vec::new();
+
   for (stream, packet) in av_format_ctx.packets() {
     // Only send packet for video streams
     if stream.index() == video_stream_index {
       // Decode into a video frame
       decoder.send_packet(&packet)?;
       // Receive the video frame and encode as webp
-      match decode_frame(&mut decoder, frame_width, &stream, max_height) {
+      match decode_frame(&mut decoder, matrix, rotation, &mut scaler) {
         Ok(frame) => {
-          // Signal end of stream on encoding success
-          decoder.send_eof()?;
-          // Receive all the frames for the eof signal
-          while decoder.receive_frame(&mut VideoFrame::empty()).is_ok() {}
-          return Ok(frame)
+          if frames.len() == frame_count {
+            // Signal end of stream on encoding success
+            decoder.send_eof()?;
+            // Receive all the frames for the eof signal
+            while decoder.receive_frame(&mut VideoFrame::empty()).is_ok() {}
+            return Ok(frames)
+          }
+          frames.push(frame);
         }
         Err(err) => {
           if err != FFMPEG_RETRY_ERR {
@@ -247,29 +270,12 @@ fn get_scaler(
 
 fn decode_frame(
   decoder: &mut decoder::Video,
-  frame_width: u32,
-  stream: &ffmpeg::Stream,
-  max_height: Option<u32>,
+  matrix: Option<[i32; 9]>,
+  rotation: i32,
+  scaler: &mut ScalingCtx,
 ) -> Result<VideoFrame, ffmpeg::Error> {
   let mut decoded = VideoFrame::empty();
   decoder.receive_frame(&mut decoded)?;
-
-  let matrix = get_display_matrix_values(&stream).ok();
-  let rotation = match matrix {
-    Some(transform) => {
-      math::av_display_rotation_get(&transform)
-      .unwrap_or_default() as i32
-    }
-    None => 0
-  };
-
-  // Allows to perform image rescaling and pixel format conversion
-  let mut scaler = get_scaler(
-    &decoder,
-    frame_width,
-    rotation,
-    max_height,
-  )?;
 
   let mut src_frame = VideoFrame::empty();
   // Convert to RGBA pixel format and resize
