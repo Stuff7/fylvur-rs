@@ -22,7 +22,8 @@ pub struct ThumbnailRequest {
 
 #[derive(Debug, Deserialize)]
 pub struct AtlasRequest {
-  seek: Option<u32>,
+  page: Option<u32>,
+  step: Option<u32>,
 }
 
 #[get("/{any:.*}")]
@@ -87,11 +88,16 @@ async fn get_video_atlas(
   let video_path = file::get_media_path(&path.into_inner());
   let video_path = video_path.to_str().unwrap_or_default();
 
-  let seek = query.seek.unwrap_or(0);
+  let page = query.page.unwrap_or(0);
+  let step = match query.step {
+    Some(step) => if step == 0 {1} else {step},
+    None => 1,
+  };
 
   match video::get_video_atlas(
     &video_path.to_string(),
-    seek,
+    page,
+    step,
   ) {
     Ok(atlas) => HttpResponse::Ok()
       .content_type("image/webp")
