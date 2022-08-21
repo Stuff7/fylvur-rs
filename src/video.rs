@@ -149,9 +149,7 @@ pub fn get_frame(
   frame_time: SeekTime,
   max_height: Option<u32>,
 ) -> Result<VideoFrame, VideoError> {
-  if let Err(err) = seek(&mut av_format_ctx, &frame_time) {
-    return Err((f!("Failed to seek to {frame_time:?}"), err).into())
-  }
+  seek(&mut av_format_ctx, &frame_time)?;
 
   let video_stream = av_format_ctx
   .streams()
