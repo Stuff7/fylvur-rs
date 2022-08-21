@@ -97,6 +97,7 @@ async fn get_video_atlas(
       .content_type("image/webp")
       .body(web::Bytes::copy_from_slice(&*atlas)),
     Err(err) => HttpResponse::BadRequest()
+      .content_type("text/plain")
       .body(f!("Could not get video atlas - {err:?}"))
   }
 }
