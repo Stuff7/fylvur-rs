@@ -78,10 +78,6 @@ impl FileInfo {
       file_type = content_type.subtype().to_string();
     }
 
-    // let duration_ms = if file_type == "video" {
-    //   video::get_duration(&raw_file_path).unwrap_or_default()
-    // } else {0};
-
     let endpoint = if file_type == "video" {
       "api/thumbnail"
     } else {"file"}.to_string();
