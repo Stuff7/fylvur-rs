@@ -23,8 +23,6 @@ const MAX_ATLAS_TILE_WIDTH: usize = 10;
 const MAX_ATLAS_TILE_HEIGHT: usize = 10;
 const ATLAS_TILE_WIDTH: usize = 80;
 const ATLAS_TILE_HEIGHT: usize = 45;
-const MAX_ATLAS_WIDTH: usize = MAX_ATLAS_TILE_WIDTH * ATLAS_TILE_WIDTH;
-const MAX_ATLAS_HEIGHT: usize = MAX_ATLAS_TILE_HEIGHT * ATLAS_TILE_HEIGHT;
 const MAX_ATLAS_TILES: u32 = MAX_ATLAS_TILE_WIDTH as u32 * MAX_ATLAS_TILE_HEIGHT as u32;
 
 pub fn init() -> Result<(), ffmpeg::Error> {
@@ -38,25 +36,45 @@ pub fn init() -> Result<(), ffmpeg::Error> {
 /// * `progress_secs` - Atlas page will contain the frame at this second
 pub fn get_video_atlas(
   video_path: &String,
-  progress_secs: u32,
+  page_i: u32,
+  frame_step: u32,
 ) -> Result<WebPMemory, VideoError> {
   let mut av_format_ctx = match format::input(video_path) {
     Ok(av_format_ctx) => av_format_ctx,
     Err(err) => return Err((f!("Could not open file \"{video_path}\""), err).into())
   };
 
-  let tile_atlas_page = progress_secs / MAX_ATLAS_TILES;
-
-  let tile_index_start = tile_atlas_page * MAX_ATLAS_TILES;
+  let tile_index_start = page_i * MAX_ATLAS_TILES;
   let tile_index_end = std::cmp::min(
-    (tile_atlas_page + 1) * MAX_ATLAS_TILES,
-    get_duration(&av_format_ctx) as u32 / 1000,
+    (page_i + 1) * MAX_ATLAS_TILES, {
+      let max_frames = get_duration(&av_format_ctx) as u32 / 1000 / frame_step;
+      let modulo = max_frames % frame_step;
+      max_frames + (frame_step - modulo)
+    },
   );
+  let tile_count = std::cmp::max(
+    0,
+    tile_index_end as i32 - tile_index_start as i32
+  ) as usize;
+
+  if tile_count == 0 {
+    return Ok(encode_webp_from_frame(&VideoFrame::new(
+      ffmpeg::format::Pixel::RGBA,
+      ATLAS_TILE_WIDTH as u32,
+      ATLAS_TILE_HEIGHT as u32,
+    )))
+  }
 
   let mut out_frame = VideoFrame::new(
     format::Pixel::RGBA,
-    MAX_ATLAS_WIDTH as u32,
-    MAX_ATLAS_HEIGHT as u32,
+    ATLAS_TILE_WIDTH as u32 * std::cmp::min(
+      tile_count as u32,
+      MAX_ATLAS_TILE_WIDTH as u32,
+    ),
+    ATLAS_TILE_HEIGHT as u32 * std::cmp::min(
+      (tile_count as u32 / MAX_ATLAS_TILE_WIDTH as u32) + 1,
+      MAX_ATLAS_TILE_HEIGHT as u32,
+    ),
   );
 
   let out_width = out_frame.width();
@@ -64,14 +82,15 @@ pub fn get_video_atlas(
 
   let mut thumb_pos = 0;
 
-  for frame_time in tile_index_start..tile_index_end {
-    let frame = get_frame(
-      &mut av_format_ctx,
-      ATLAS_TILE_WIDTH as u32,
-      SeekTime::Seconds(frame_time),
-      Some(ATLAS_TILE_HEIGHT as u32),
-    )?;
-
+  let frames = get_frame(
+    &mut av_format_ctx,
+    ATLAS_TILE_WIDTH as u32,
+    SeekTime::Seconds(tile_index_start),
+    tile_count,
+    frame_step,
+    Some(ATLAS_TILE_HEIGHT as u32),
+  )?;
+  for frame in frames {
     let frame_width = frame.width() as usize;
     let frame_height = frame.height() as usize;
     // Center image in tile when width/height is too small
@@ -138,17 +157,21 @@ pub fn get_video_thumbnail(
     &mut av_format_ctx,
     thumbnail_width,
     time_position,
+    1,
+    1,
     None,
   )?;
-  Ok(encode_webp_from_frame(&frame))
+  Ok(encode_webp_from_frame(&frame[0]))
 }
 
 pub fn get_frame(
   mut av_format_ctx: &mut AVFormatContext,
   frame_width: u32,
   frame_time: SeekTime,
+  frame_count: usize,
+  fps: u32,
   max_height: Option<u32>,
-) -> Result<VideoFrame, VideoError> {
+) -> Result<Vec<VideoFrame>, VideoError> {
   seek(&mut av_format_ctx, &frame_time)?;
 
   let video_stream = av_format_ctx
@@ -168,30 +191,58 @@ pub fn get_frame(
     frame_width
   };
 
-  for (stream, packet) in av_format_ctx.packets() {
-    // Only send packet for video streams
-    if stream.index() == video_stream_index {
-      // Decode into a video frame
-      decoder.send_packet(&packet)?;
-      // Receive the video frame and encode as webp
-      match decode_frame(&mut decoder, frame_width, &stream, max_height) {
-        Ok(frame) => {
-          // Signal end of stream on encoding success
-          decoder.send_eof()?;
-          // Receive all the frames for the eof signal
-          while decoder.receive_frame(&mut VideoFrame::empty()).is_ok() {}
-          return Ok(frame)
-        }
-        Err(err) => {
+  let matrix = get_display_matrix_values(&video_stream).ok();
+  let rotation = match matrix {
+    Some(transform) => {
+      math::av_display_rotation_get(&transform)
+      .unwrap_or_default() as i32
+    }
+    None => 0
+  };
+
+  // Allows to perform image rescaling and pixel format conversion
+  let mut scaler = get_scaler(
+    &decoder,
+    frame_width,
+    rotation,
+    max_height,
+  )?;
+  let mut frames = Vec::new();
+  let mut seconds: u32 = frame_time.into();
+
+  while frames.len() < frame_count {
+    for (stream, packet) in av_format_ctx.packets() {
+      // Only send packet for video streams
+      if stream.index() == video_stream_index {
+        // Decode into a video frame
+        if let Err(err) = decoder.send_packet(&packet) {
           if err != FFMPEG_RETRY_ERR {
-            return Err(("Error receiving frame", err).into())
+            return Err(("Error sending packet", err).into())
+          }
+        }
+        // Receive the video frame and do format/scale/rotation transformations
+        match decode_frame(&mut decoder, matrix, rotation, &mut scaler) {
+          Ok(frame) => {
+            frames.push(frame);
+            break
+          }
+          Err(err) => {
+            if err != FFMPEG_RETRY_ERR {
+              return Err(("Error receiving frame", err).into())
+            }
           }
         }
       }
     }
+    seconds += fps;
+    seek_seconds(&mut av_format_ctx, seconds)?;
   }
 
-  Err(VideoError::new("Could not find a valid video stream"))
+  // Signal end of stream on encoding success
+  decoder.send_eof()?;
+  // Receive all the frames for the eof signal
+  while decoder.receive_frame(&mut VideoFrame::empty()).is_ok() {}
+  Ok(frames)
 }
 
 fn get_display_matrix_values(stream: &ffmpeg::Stream) -> Result<[i32; 9], String> {
@@ -245,29 +296,12 @@ fn get_scaler(
 
 fn decode_frame(
   decoder: &mut decoder::Video,
-  frame_width: u32,
-  stream: &ffmpeg::Stream,
-  max_height: Option<u32>,
+  matrix: Option<[i32; 9]>,
+  rotation: i32,
+  scaler: &mut ScalingCtx,
 ) -> Result<VideoFrame, ffmpeg::Error> {
   let mut decoded = VideoFrame::empty();
   decoder.receive_frame(&mut decoded)?;
-
-  let matrix = get_display_matrix_values(&stream).ok();
-  let rotation = match matrix {
-    Some(transform) => {
-      math::av_display_rotation_get(&transform)
-      .unwrap_or_default() as i32
-    }
-    None => 0
-  };
-
-  // Allows to perform image rescaling and pixel format conversion
-  let mut scaler = get_scaler(
-    &decoder,
-    frame_width,
-    rotation,
-    max_height,
-  )?;
 
   let mut src_frame = VideoFrame::empty();
   // Convert to RGBA pixel format and resize
@@ -379,15 +413,19 @@ pub enum SeekTime {
   Percentage(f32),
 }
 
+impl Into<u32> for SeekTime {
+  fn into(self) -> u32 {
+    use SeekTime::*;
+    match self {
+      Seconds(s) => s,
+      Percentage(s) => s as u32,
+    }
+  }
+}
+
 #[derive(Debug)]
 pub struct VideoError {
   message: String,
-}
-
-impl VideoError {
-  fn new<T: ToString>(message: T) -> Self {
-    Self { message: message.to_string() }
-  }
 }
 
 impl Display for VideoError {
